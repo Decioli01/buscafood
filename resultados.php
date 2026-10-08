@@ -16,45 +16,66 @@
 <title>Resultado</title>
 </head>
 <body>
-<?php 
-   include("conexao.php");
+<?php
+require_once __DIR__ . '/services/deliveryMuchService.php';
+require_once __DIR__ . '/services/aiqfomeService.php';
 
-   // Faz a requisição das informações que foram preenchidas na tela inicial e guarda em variáveis
-   $prato = mysqli_real_escape_string($conn, $_REQUEST['prato']);
-   $local = mysqli_real_escape_string($conn, $_REQUEST['location']);
-   $categoria = mysqli_real_escape_string($conn, $_REQUEST['categorias']);
-   
-   // Realiza a verificação se o botão 'Filtrar' foi clicado
-   if (@$_REQUEST['btn-filtrar']) {
-       $filtro_preco = mysqli_real_escape_string($conn, $_REQUEST['slide-preco']);
-       $tamanho = !empty($_REQUEST['tamanho']) ? mysqli_real_escape_string($conn, $_REQUEST['tamanho']) : NULL;
-       $ordenacao = !empty($_REQUEST['ordem']) ? mysqli_real_escape_string($conn, $_REQUEST['ordem']) : NULL;
-   
-       // Monta a chamada da stored procedure quando botão clicado
-        $stmt = $conn->prepare("CALL BuscarProdutosComFiltro(?, ?, ?, ?, ?, ?)");
-        $stmt->bind_param("ssiiii", $prato, $local, $categoria, $filtro_preco, $tamanho, $ordenacao);
-        $stmt->execute();
-        $result = $stmt->get_result();
+$delivery = new DeliveryMuchService();
+$aiqfome = new AiqfomeService();
 
-   } else {
-       // Monta a chamada da stored procedure com os dados iniciais
-        $stmt = $conn->prepare("CALL BuscarProdutos(?, ?, ?)");
-        $stmt->bind_param("ssi", $prato, $local, $categoria);
-        $stmt->execute();
-        $result = $stmt->get_result();
-   }
-    // Guarda a quantidade de itens encontrados na busca em uma variável
-    $count = mysqli_num_rows($result);
+$prato = trim((string) ($_REQUEST['prato'] ?? ''));
+$local = trim((string) ($_REQUEST['location'] ?? ''));
+$categoria = trim((string) ($_REQUEST['categorias'] ?? ''));
 
-    echo "<div style='display: flex; justify-content: space-between; align-items: center; padding-top: 20px;'>
-            <a href='index.html' class='logo-result' style='width: fit-content;'><img id='logo' src='./images/LogoLight2.png' alt='' style='margin-left: 3rem;'></a>
-            <label style='margin-right: 20px' class='switch'>
-                <input id='btnDarkMode' type='checkbox'>
-                <span class='slider'></span>
-            </label>
-            </div>";  
-    // Mostra a quantidade de itens encontrados com a busca
+$filtro_preco = isset($_REQUEST['slide-preco']) ? (float) $_REQUEST['slide-preco'] : 100;
+$tamanho = !empty($_REQUEST['tamanho']) ? trim((string) $_REQUEST['tamanho']) : null;
+$ordenacao = !empty($_REQUEST['ordem']) ? trim((string) $_REQUEST['ordem']) : null;
+
+$coordenadasLocal = $delivery->coordenadasPorTexto($local);
+$latBusca = $coordenadasLocal['lat'] ?? null;
+$lngBusca = $coordenadasLocal['lng'] ?? null;
+
+$resultadosDelivery = [];
+if ($latBusca !== null && $lngBusca !== null) {
+    $resultadosDelivery = $delivery->buscarProdutosPorBusca($latBusca, $lngBusca, $prato, $categoria, 15, 60);
+}
+
+$resultadosAiqfome = $aiqfome->buscarProdutosPorBusca($prato, $categoria, $local);
+$resultados = array_merge($resultadosDelivery, $resultadosAiqfome);
+$modoIntegracao = !empty($resultados);
+
+if (isset($_REQUEST['btn-filtrar'])) {
+    $resultados = array_values(array_filter($resultados, function ($item) use ($filtro_preco) {
+        $preco = isset($item['menorPreco']) && is_numeric($item['menorPreco']) ? (float) $item['menorPreco'] : null;
+        return $preco === null || $preco <= $filtro_preco;
+    }));
+}
+
+usort($resultados, function ($a, $b) {
+    $pa = isset($a['menorPreco']) && is_numeric($a['menorPreco']) ? (float) $a['menorPreco'] : PHP_FLOAT_MAX;
+    $pb = isset($b['menorPreco']) && is_numeric($b['menorPreco']) ? (float) $b['menorPreco'] : PHP_FLOAT_MAX;
+    return $pa <=> $pb;
+});
+
+$count = count($resultados);
+
+echo "<div style='display: flex; justify-content: space-between; align-items: center; padding-top: 20px;'>
+        <a href='index.html' class='logo-result' style='width: fit-content;'><img id='logo' src='./images/LogoLight2.png' alt='' style='margin-left: 3rem;'></a>
+        <label style='margin-right: 20px' class='switch'>
+            <input id='btnDarkMode' type='checkbox'>
+            <span class='slider'></span>
+        </label>
+        </div>";
+
+if ($latBusca !== null && $lngBusca !== null) {
+    echo "<p style='text-align:center; color:#666; margin-top:10px;'>Localização convertida para: " . number_format($latBusca, 6, ',', '.') . ", " . number_format($lngBusca, 6, ',', '.') . "</p>";
+}
+
+if ($modoIntegracao) {
     echo "<h1 style='padding: 10px; margin-top: 1rem; text-align: center;'>Exibindo $count resultados para '$prato' em '$local'</h1>";
+} else {
+    echo "<h1 style='padding: 10px; margin-top: 1rem; text-align: center;'>Não foi possível localizar a cidade informada. Tente outra localidade.</h1>";
+}
 ?>
 <section class="results">
     <div class="results-filtros">
@@ -63,109 +84,97 @@
         </div>
         <div class="filtros">
             <h3>Filtros</h3>
-            <!-- Guarda as informações dos campos de busca vindo da tela inicial para quando o botão 'Filtrar' for clicado não forem perdidas -->
-            <?php echo '<form action="./resultados.php" method="post">
-                <input type="hidden" name="prato" value='.$prato.'> 
-                <input type="hidden" name="location" value='.$local.'> 
-                <input type="hidden" name="categorias" value='.$categoria.'>' 
-            ?>
+            <form action="./resultados.php" method="post">
+                <input type="hidden" name="prato" value="<?php echo htmlspecialchars($prato, ENT_QUOTES, 'UTF-8'); ?>">
+                <input type="hidden" name="location" value="<?php echo htmlspecialchars($local, ENT_QUOTES, 'UTF-8'); ?>">
+                <input type="hidden" name="categorias" value="<?php echo htmlspecialchars($categoria, ENT_QUOTES, 'UTF-8'); ?>">
                 <div class="results-slide">
                     <h3>Valor Máximo</h3>
-                    <input type="range" min="10" max="100" step="10.00" value="<?php echo $filtro_preco?>" name="slide-preco">
+                    <input type="range" min="10" max="100" step="10.00" value="<?php echo htmlspecialchars((string) $filtro_preco, ENT_QUOTES, 'UTF-8'); ?>" name="slide-preco">
                     <div class="results-slide-numbers">
                         <h4>R$10,00</h4>
                         <h4>R$100,00</h4>
-                    </div>
-                </div>
-                <div class="filtro-tamanhos">
-                    <h3 style="margin-top: 20px;">Tamanhos</h3>
-                    <div class="inputsTamanhos">
-                        <div class="input">
-                            <input type="radio" name="tamanho" id="tam_P" value="1">
-                            <label for="tam_P">P</label>
-                        </div>
-                        <div class="input">
-                            <input type="radio" name="tamanho" id="tam_M" value="2">
-                            <label for="tam_M">M</label>
-                        </div>
-                        <div class="input">
-                            <input type="radio" name="tamanho" id="tam_G" value="3">
-                            <label for="tam_G">G</label>
-                        </div>
                     </div>
                 </div>
                 <div class="filtro-ordem">
                     <h3 style="margin-top: 20px;">Ordem</h3>
                     <div class="inputsOrdem">
                         <div class="input">
-                            <input type="radio" name="ordem" id="ord_P" value="1">
+                            <input type="radio" name="ordem" id="ord_P" value="1" <?php echo ($ordenacao === '1') ? 'checked' : ''; ?>>
                             <label for="ord_P">Preço</label>
                         </div>
                         <div class="input">
-                            <input type="radio" name="ordem" id="ord_A" value="2">
+                            <input type="radio" name="ordem" id="ord_A" value="2" <?php echo ($ordenacao === '2') ? 'checked' : ''; ?>>
                             <label for="ord_A">Avaliação</label>
                         </div>
                     </div>
-                </div> 
+                </div>
                 <input type="submit" name="btn-filtrar" class="btn" value="Filtrar" style="margin: 1.5rem; align-self: center; width: 100px; padding: .5rem;">
             </form>
-        </div>   
+        </div>
     </div>
     <div class="results-cards">
         <?php
-        // Faz a verificação para quando a busca não retorna nenhum resultado, imprimindo a mensagem na tela, caso contrário percorre o array de resultados
-            if ($count <= 0){
-                echo "<div>
-                        <h3 style='text-align: center; font-size:3rem'>Não foram encontrados resultados!<br>
-                        Tente novamente utilizando outros termos</h3>
-                    </div>";
-            }
-            else{
-                $nota_conn = new mysqli($host, $usuario, $senha, $bd);
-                
-                // Percorre o array de resultados, imprimindo cada índice com suas informações em um card
-                while($campo = $result->fetch_assoc()){           
-                    $id_criptado = base64_encode($campo["proId"]);
-                    
-                    $nota_query = "SELECT COUNT(nota_avaliada) as total_notas FROM avaliacao WHERE id_prod = '".$campo['proId']."'";
-
-                    $nota_result = $nota_conn->query($nota_query);
-                    
-                    if ($nota_result) {
-                        $nota_media = mysqli_fetch_assoc($nota_result);
-                        if ($nota_media) {
-                            $total_notas = $nota_media["total_notas"];
-                        } else {
-                            $total_notas = 0;
-                        }
-                    } else {
-                        $total_notas = 0;
-                        echo "Erro na query de notas: " . mysqli_error($conn);
+        if ($count <= 0) {
+            echo "<div>
+                    <h3 style='text-align: center; font-size:3rem'>Não foram encontrados resultados!<br>
+                    Tente novamente utilizando outros termos</h3>
+                </div>";
+        } else {
+            foreach ($resultados as $campo) {
+                $nomeProduto = htmlspecialchars((string) ($campo['proNome'] ?? 'Produto'), ENT_QUOTES, 'UTF-8');
+                $nomeEstabelecimento = htmlspecialchars((string) ($campo['estNome'] ?? 'Delivery Much'), ENT_QUOTES, 'UTF-8');
+                $tamProduto = htmlspecialchars((string) ($campo['tamNome'] ?? 'Padrão'), ENT_QUOTES, 'UTF-8');
+                $imagemProduto = !empty($campo['proImagem']) ? (string) $campo['proImagem'] : './images/default-product.png';
+                $precoProduto = isset($campo['menorPreco']) && is_numeric($campo['menorPreco']) ? 'R$' . number_format((float) $campo['menorPreco'], 2, ',', '.') : 'Consulte';
+                $avaliacao = isset($campo['avaliacao_media']) && is_numeric($campo['avaliacao_media']) ? (float) $campo['avaliacao_media'] : 0;
+                $idProduto = isset($campo['proId']) ? (string) $campo['proId'] : '';
+                $companyUuid = isset($campo['company_uuid']) ? (string) $campo['company_uuid'] : '';
+                $companyName = isset($campo['estNome']) ? (string) $campo['estNome'] : '';
+                $linkProduto = $idProduto !== '' ? './produto.php?id=' . rawurlencode($idProduto) : './produto.php';
+                $linkTarget = '';
+                if (($campo['source'] ?? '') === 'aiqfome') {
+                    $linkExterno = !empty($campo['linkExterno']) ? (string) $campo['linkExterno'] : '';
+                    $linkProduto = './produto.php?source=aiqfome';
+                    if ($linkExterno !== '') {
+                        $linkProduto .= '&link=' . rawurlencode($linkExterno);
                     }
-                
-                    echo "<a href='./produto.php?id=".$id_criptado."'>
-                            <div class='card'>
-                            <p id='nota_media'>".$campo["avaliacao_media"]."<i class='fas fa-star'></i>(".$total_notas.")</p>
-                                <div class='card-img'>";
-                    echo "<img src='./ctrl-buscafood/images/produtos/".$campo["proImagem"]."' alt=''>";
-                    echo "      </div>
-                                <div class='card-info'>
-                                    <p style='display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; text-overflow: ellipsis;' class='text-title'>".$campo["proNome"]." (".$campo["tamNome"].")</p>
-                                    <h3 style='color: #808080; text-overflow: ellipsis; white-space: nowrap; overflow-x: hidden;'>".$campo["estNome"]."</h3>
-                                </div>
-                                <div class='card-footer'>
-                                    <span class='text-title'>A partir de <br>R$".$campo["menorPreco"]."</span>
-                                </div>
-                            </div> 
-                        </a>";
-                } 
-                $stmt->close();
-                $nota_conn->close();
-                mysqli_close($conn);
-            }           
-        ?>            
+                    if ($nomeProduto !== '') {
+                        $linkProduto .= '&nome=' . rawurlencode($nomeProduto);
+                    }
+                    if (isset($campo['menorPreco']) && is_numeric($campo['menorPreco'])) {
+                        $linkProduto .= '&preco=' . rawurlencode((string) $campo['menorPreco']);
+                    }
+                    $linkTarget = "";
+                } else {
+                    if ($companyUuid !== '') {
+                        $linkProduto .= '&company=' . rawurlencode($companyUuid);
+                    }
+                    if ($companyName !== '') {
+                        $linkProduto .= '&company_name=' . rawurlencode($companyName);
+                    }
+                }
+
+                echo "<a href='{$linkProduto}' {$linkTarget}>
+                        <div class='card'>
+                            <p id='nota_media'>" . number_format($avaliacao, 1, ',', '.') . "<i class='fas fa-star'></i>(0)</p>
+                            <div class='card-img'>
+                                <img src='{$imagemProduto}' alt='{$nomeProduto}' onerror=\"this.onerror=null;this.src='./images/default-product.png';\">
+                            </div>
+                            <div class='card-info'>
+                                <p style='display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; text-overflow: ellipsis;' class='text-title'>{$nomeProduto} ({$tamProduto})</p>
+                                <h3 style='color: #808080; text-overflow: ellipsis; white-space: nowrap; overflow-x: hidden;'>{$nomeEstabelecimento}</h3>
+                            </div>
+                            <div class='card-footer'>
+                                <span class='text-title'>A partir de <br>{$precoProduto}</span>
+                            </div>
+                        </div>
+                    </a>";
+            }
+        }
+        ?>
     </div>
-</section> 
+</section>
     <script src="./js/darkMode.js"></script>
     <script src="./js/scriptFiltros.js"></script>
 </body>
