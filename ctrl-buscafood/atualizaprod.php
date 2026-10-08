@@ -63,7 +63,7 @@
 
                                 <header class="header">
                                     <div id="logout" >
-                                        <a href="listarprod.php?id_estab=<?php echo $id_estab?>">Cancelar</a>
+                                        <a href="listarProd.php?id_estab=<?php echo $id?>">Voltar</a>
                                     </div>
                                 </header>
                                 

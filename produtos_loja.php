@@ -82,6 +82,7 @@
                                     </div>
                                 </div> 
                             </a>";
+                                $campo = mysqli_fetch_array($consulta);
                         } 
                     }          
                     mysqli_close($conn);

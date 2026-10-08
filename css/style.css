@@ -960,9 +960,15 @@ input:checked + .slider:before {
   }
   .results .results-cards .card {
     max-width: 200px;
-    max-height: 230px;
+    min-height: auto;
     border-radius: 20px;
   }
+}
+
+/* allow card footer text (price) to wrap and expand card height */
+.card-footer .text-title {
+  white-space: normal;
+  word-break: break-word;
 }
 @media (max-width: 1430px){
   .home .content{
@@ -1142,6 +1148,9 @@ input:checked + .slider:before {
   .results .results-cards{
     width: 100%;
     height: 100%;
+  }
+  .results-cards .card{
+    min-height: auto;
   }
   .results-cards .card img{
     height: 70px;
